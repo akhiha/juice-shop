@@ -5,6 +5,7 @@
 
 import fs from 'fs'
 import crypto from 'crypto'
+import dotenv from 'dotenv'
 import { type Request, type Response, type NextFunction } from 'express'
 import { type UserModel } from 'models/user'
 import expressJwt from 'express-jwt'
@@ -40,8 +41,16 @@ interface IAuthenticatedUsers {
   updateFrom: (req: Request, user: ResponseWithUser) => any
 }
 
+dotenv.config();
+
+const secretKey = process.env.COUPON_SECRET_KEY;
+
+if (!secretKey) {
+  throw new Error('COUPON_SECRET_KEY environment variable is not set');
+}
+
 export const hash = (data: string) => crypto.createHash('md5').update(data).digest('hex')
-export const hmac = (data: string) => crypto.createHmac('sha256', 'pa4qacea4VK9t9nGv7yZtwmj').update(data).digest('hex')
+export const hmac = (data: string) => crypto.createHmac('sha256', secretKey).update(data).digest('hex')
 
 export const cutOffPoisonNullByte = (str: string) => {
   const nullByte = '%00'
@@ -97,19 +106,32 @@ export const userEmailFrom = ({ headers }: any) => {
 }
 
 export const generateCoupon = (discount: number, date = new Date()) => {
-  const coupon = utils.toMMMYY(date) + '-' + discount
-  return z85.encode(coupon)
+  const validity = utils.toMMMYY(date);
+  const couponData = `${validity}-${discount}`;
+
+  const couponHash = hmac(couponData);
+  //return `${validity}-${discount}-${hash}`;
+
+  const coupon = `${z85.encode(couponData)}.${couponHash}`;
+  return coupon;
 }
 
 export const discountFromCoupon = (coupon: string) => {
   if (coupon) {
-    const decoded = z85.decode(coupon)
-    if (decoded && (hasValidFormat(decoded.toString()) != null)) {
-      const parts = decoded.toString().split('-')
-      const validity = parts[0]
-      if (utils.toMMMYY(new Date()) === validity) {
-        const discount = parts[1]
-        return parseInt(discount)
+    const [encodedCouponData, providedHash] = coupon.split('.'); // Split encoded coupon and HMAC
+    const decodedCouponData = z85.decode(encodedCouponData);
+
+    if (decodedCouponData && (hasValidFormat(decodedCouponData.toString()) != null)) {
+      const couponData = decodedCouponData.toString();
+      const generatedHash = hmac(couponData); // Generate HMAC hash again to verify
+
+      if (providedHash === generatedHash) { // Check if the hashes match
+        const parts = couponData.split('-');
+        const validity = parts[0];
+        if (utils.toMMMYY(new Date()) === validity) {
+          const discount = parts[1];
+          return parseInt(discount);
+        }
       }
     }
   }
